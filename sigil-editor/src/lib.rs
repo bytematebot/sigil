@@ -12,7 +12,7 @@
 #![allow(non_snake_case)]
 
 use dioxus::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use sigil_core::{Sigil, Layer, Item, RectItem, TextItem, ImageItem};
 
 const MAIN_CSS: Asset = asset!("/assets/editor.css");
@@ -51,6 +51,14 @@ pub enum DragMode {
         center_y: f64,
         start_angle: f64,
     },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Guide {
+    is_vertical: bool,
+    pos: f32,
+    start: f32,
+    end: f32,
 }
 
 const GRID_SIZE: f32 = 20.0;
@@ -100,8 +108,14 @@ pub fn SigilEditor() -> Element {
     let mut drag_over_state = use_signal(|| None::<(usize, bool)>);
     let mut selected_layers = use_signal(|| HashSet::<usize>::new());
     let mut locked_layers = use_signal(|| HashSet::<usize>::new());
+    let mut clipboard = use_signal(|| Vec::<Layer>::new());
+    let mut guides = use_signal(|| Vec::<Guide>::new());
+    let mut text_dimensions = use_signal(|| HashMap::<String, (f32, f32)>::new());
     let mut add_layer_type = use_signal(|| "Rectangle".to_string());
     let mut layer_id_counter = use_signal(|| 2);
+    let mut show_load_modal = use_signal(|| false);
+    let mut load_json_text = use_signal(|| String::new());
+    let mut load_error = use_signal(|| None::<String>);
 
     let cursor_style = if dragging.read().is_some() { "grabbing" } else { "default" };
 
@@ -112,13 +126,55 @@ pub fn SigilEditor() -> Element {
             style: "cursor: {cursor_style};",
             tabindex: "0",
             onkeydown: move |evt| {
-                if evt.key() == Key::Character("a".to_string()) && (evt.modifiers().contains(Modifiers::CONTROL) || evt.modifiers().contains(Modifiers::META)) {
+                let is_ctrl = evt.modifiers().contains(Modifiers::CONTROL) || evt.modifiers().contains(Modifiers::META);
+
+                if evt.key() == Key::Character("a".to_string()) && is_ctrl {
                     let len = sigil.read().layers.len();
                     let all_indices: HashSet<usize> = (0..len).collect();
                     selected_layers.set(all_indices);
                     evt.stop_propagation();
                     evt.prevent_default();
                 }
+
+                if evt.key() == Key::Character("c".to_string()) && is_ctrl {
+                    let selected = selected_layers.read();
+                    let layers = &sigil.read().layers;
+                    let mut to_copy = Vec::new();
+                    for &idx in selected.iter() {
+                        if let Some(layer) = layers.get(idx) {
+                            to_copy.push(layer.clone());
+                        }
+                    }
+                    if !to_copy.is_empty() {
+                        clipboard.set(to_copy);
+                    }
+                    evt.stop_propagation();
+                    evt.prevent_default();
+                }
+
+                if evt.key() == Key::Character("v".to_string()) && is_ctrl {
+                    let to_paste = clipboard.read().clone();
+                    if !to_paste.is_empty() {
+                        let mut new_selection = HashSet::new();
+                        let mut current_id = *layer_id_counter.read();
+                        
+                        for mut layer in to_paste {
+                            current_id += 1;
+                            layer.id = format!("{}_{}", layer.id, current_id);
+                            layer.x += 20.0;
+                            layer.y += 20.0;
+                            
+                            sigil.write().layers.push(layer);
+                            new_selection.insert(sigil.read().layers.len() - 1);
+                        }
+                        
+                        layer_id_counter.set(current_id);
+                        selected_layers.set(new_selection);
+                    }
+                    evt.stop_propagation();
+                    evt.prevent_default();
+                }
+
                 if evt.key() == Key::Delete {
                     let to_remove: Vec<usize> = selected_layers.read().iter().cloned().collect();
                     if !to_remove.is_empty() {
@@ -130,22 +186,191 @@ pub fn SigilEditor() -> Element {
                         selected_layers.write().clear();
                     }
                 }
+
+                if evt.key() == Key::Character("o".to_string()) && is_ctrl {
+                    load_json_text.set(String::new());
+                    load_error.set(None);
+                    show_load_modal.set(true);
+                    evt.stop_propagation();
+                    evt.prevent_default();
+                }
+
+                if evt.key() == Key::Escape {
+                    if *show_load_modal.read() {
+                        show_load_modal.set(false);
+                        evt.stop_propagation();
+                        evt.prevent_default();
+                    }
+                }
             },
             onmousemove: move |evt| {
-                if let Some((_, ref mut mode)) = *dragging.write() {
+                let mut dragging_write = dragging.write();
+                if let Some((drag_idx, ref mut mode)) = *dragging_write {
                     let coords = evt.page_coordinates();
                     
                     match mode {
                         DragMode::Move { start_x, start_y, original_positions } => {
-                            let delta_x = coords.x - *start_x;
-                            let delta_y = coords.y - *start_y;
+                            let mut delta_x = coords.x - *start_x;
+                            let mut delta_y = coords.y - *start_y;
                             
+                            let mut lock_x = false;
+                            let mut lock_y = false;
+
+                            if evt.modifiers().contains(Modifiers::SHIFT) {
+                                if delta_x.abs() > delta_y.abs() {
+                                    delta_y = 0.0;
+                                    lock_y = true;
+                                } else {
+                                    delta_x = 0.0;
+                                    lock_x = true;
+                                }
+                            }
+
+                            guides.write().clear();
+                            
+                            if let Some((_, orig_x, orig_y)) = original_positions.iter().find(|(idx, _, _)| *idx == drag_idx) {
+                                let sigil_read = sigil.read();
+                                let canvas_w = sigil_read.width as f32;
+                                let canvas_h = sigil_read.height as f32;
+                                
+                                if let Some(layer) = sigil_read.layers.get(drag_idx) {
+                                    let (w, h) = match &layer.item {
+                                        Item::Rect(r) => (r.width, r.height),
+                                        Item::Image(i) => (i.width, i.height),
+                                        Item::Text(t) => {
+                                            if let Some(&(tw, th)) = text_dimensions.read().get(&layer.id) {
+                                                (tw, th)
+                                            } else {
+                                                (t.text.len() as f32 * t.font_size * 0.6, t.font_size)
+                                            }
+                                        },
+                                    };
+
+                                    let mut proposed_x = *orig_x + delta_x as f32;
+                                    let mut proposed_y = *orig_y + delta_y as f32;
+                                    
+                                    let threshold = 5.0;
+                                    let mut snap_x_delta: Option<f32> = None;
+                                    let mut snap_y_delta: Option<f32> = None;
+
+                                    let mut check_snap = |val: f32, target: f32, is_vertical: bool, start: f32, end: f32| {
+                                        let diff = target - val;
+                                        if diff.abs() < threshold {
+                                            if is_vertical {
+                                                if snap_x_delta.is_none() || diff.abs() < snap_x_delta.unwrap().abs() {
+                                                    snap_x_delta = Some(diff);
+                                            
+                                                }
+                                            } else {
+                                                if snap_y_delta.is_none() || diff.abs() < snap_y_delta.unwrap().abs() {
+                                                    snap_y_delta = Some(diff);
+                                                }
+                                            }
+                                            return true;
+                                        }
+                                        false
+                                    };
+
+
+                                    let v_targets = vec![
+                                        (0.0, 0.0, canvas_h), 
+                                        (canvas_w / 2.0, 0.0, canvas_h), 
+                                        (canvas_w, 0.0, canvas_h), 
+                                    ];
+                                    
+                                    let h_targets = vec![
+                                        (0.0, 0.0, canvas_w), 
+                                        (canvas_h / 2.0, 0.0, canvas_w), 
+                                        (canvas_h, 0.0, canvas_w),
+                                    ];
+
+                                    let mut other_v_targets = Vec::new();
+                                    let mut other_h_targets = Vec::new();
+                                    
+                                    for (i, l) in sigil_read.layers.iter().enumerate() {
+                                        if i != drag_idx && !selected_layers.read().contains(&i) && l.visible {
+                                            let (lw, lh) = match &l.item {
+                                                Item::Rect(r) => (r.width, r.height),
+                                                Item::Image(img) => (img.width, img.height),
+                                                Item::Text(t) => {
+                                                    if let Some(&(tw, th)) = text_dimensions.read().get(&l.id) {
+                                                        (tw, th)
+                                                    } else {
+                                                        (t.text.len() as f32 * t.font_size * 0.6, t.font_size)
+                                                    }
+                                                },
+                                            };
+                                            
+                                            other_v_targets.push((l.x, l.y, l.y + lh)); 
+                                            other_v_targets.push((l.x + lw / 2.0, l.y, l.y + lh)); 
+                                            other_v_targets.push((l.x + lw, l.y, l.y + lh)); 
+                                            
+                                            other_h_targets.push((l.y, l.x, l.x + lw)); 
+                                            other_h_targets.push((l.y + lh / 2.0, l.x, l.x + lw)); 
+                                            other_h_targets.push((l.y + lh, l.x, l.x + lw)); 
+                                        }
+                                    }
+
+                                    let mut best_v_guide = None;
+                                    
+                                    if !lock_x {
+                                        let x_points = vec![
+                                            (proposed_x, 0.0), 
+                                            (proposed_x + w / 2.0, w / 2.0), 
+                                            (proposed_x + w, w), 
+                                        ];
+
+                                        for (pt_x, offset) in x_points {
+                                            for &(target, t_start, t_end) in v_targets.iter().chain(other_v_targets.iter()) {
+                                                if (pt_x - target).abs() < threshold {
+                                                    if snap_x_delta.is_none() || (target - pt_x).abs() < snap_x_delta.unwrap().abs() {
+                                                        snap_x_delta = Some(target - pt_x);
+                                                        let min_y = proposed_y.min(t_start);
+                                                        let max_y = (proposed_y + h).max(t_end);
+                                                        best_v_guide = Some(Guide { is_vertical: true, pos: target, start: min_y, end: max_y });
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    let mut best_h_guide = None;
+                                    
+                                    if !lock_y {
+                                        let y_points = vec![
+                                            (proposed_y, 0.0), 
+                                            (proposed_y + h / 2.0, h / 2.0), 
+                                            (proposed_y + h, h), 
+                                        ];
+
+                                        for (pt_y, offset) in y_points {
+                                            for &(target, t_start, t_end) in h_targets.iter().chain(other_h_targets.iter()) {
+                                                if (pt_y - target).abs() < threshold {
+                                                    if snap_y_delta.is_none() || (target - pt_y).abs() < snap_y_delta.unwrap().abs() {
+                                                        snap_y_delta = Some(target - pt_y);
+                                                        let min_x = proposed_x.min(t_start);
+                                                        let max_x = (proposed_x + w).max(t_end);
+                                                        best_h_guide = Some(Guide { is_vertical: false, pos: target, start: min_x, end: max_x });
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if let Some(dx) = snap_x_delta {
+                                        delta_x += dx as f64;
+                                        if let Some(g) = best_v_guide { guides.write().push(g); }
+                                    }
+                                    if let Some(dy) = snap_y_delta {
+                                        delta_y += dy as f64;
+                                        if let Some(g) = best_h_guide { guides.write().push(g); }
+                                    }
+                                }
+                            }
+
                             for (idx, orig_x, orig_y) in original_positions {
                                 let mut new_x = *orig_x + delta_x as f32;
                                 let mut new_y = *orig_y + delta_y as f32;
 
-                                new_x = snap_to_grid(new_x);
-                                new_y = snap_to_grid(new_y);
                                 
                                 if let Some(layer) = sigil.write().layers.get_mut(*idx) {
                                     layer.x = new_x;
@@ -238,6 +463,7 @@ pub fn SigilEditor() -> Element {
             },
             onmouseup: move |_| {
                 dragging.set(None);
+                guides.write().clear();
             },
 
             div {
@@ -248,12 +474,25 @@ pub fn SigilEditor() -> Element {
                     h2 { "Sigil Editor" }
                     button {
                         class: "primary-btn",
+                        r#type: "button",
                         onclick: move |_| async move {
                             let json = serde_json::to_string_pretty(&*sigil.read()).unwrap();
                             let mut eval = document::eval(&format!("navigator.clipboard.writeText(`{}`)", json));
                             let _: Result<serde_json::Value, _> = eval.recv().await;
                         },
                         "Copy JSON"
+                    }
+                    button {
+                        class: "primary-btn",
+                        r#type: "button",
+                        onclick: move |evt| {
+                            evt.stop_propagation();
+                            evt.prevent_default();
+                            load_json_text.set(String::new());
+                            load_error.set(None);
+                            show_load_modal.set(true);
+                        },
+                        "Load JSON"
                     }
                 }
                 
@@ -737,6 +976,9 @@ pub fn SigilEditor() -> Element {
 
             div {
                 class: "right-panel",
+                onclick: move |_| {
+                    selected_layers.write().clear();
+                },
                 
                 h2 { "Preview (Drag items to move)" }
 
@@ -763,6 +1005,7 @@ pub fn SigilEditor() -> Element {
                                         layer: layer.clone(),
                                         is_selected,
                                         is_locked,
+                                        text_dimensions: text_dimensions,
                                         on_move_start: move |evt: MouseEvent| {
                                         if locked_layers.read().contains(&idx) {
                                             return;
@@ -820,13 +1063,20 @@ pub fn SigilEditor() -> Element {
                                     SelectionOverlay {
                                         key: "overlay_{idx}",
                                         layer: layer.clone(),
+                                        text_dimensions: text_dimensions,
                                         on_resize_start: move |(handle, evt): (HandleType, MouseEvent)| {
                                             if selected_layers.read().len() == 1 {
                                                 let coords = evt.page_coordinates();
                                                 let (w, h) = match &sigil.read().layers[idx].item {
                                                     Item::Rect(r) => (r.width, r.height),
                                                     Item::Image(i) => (i.width, i.height),
-                                                    _ => (0.0, 0.0),
+                                                    Item::Text(t) => {
+                                                        if let Some(&(tw, th)) = text_dimensions.read().get(&sigil.read().layers[idx].id) {
+                                                            (tw, th)
+                                                        } else {
+                                                            (t.text.len() as f32 * t.font_size * 0.6, t.font_size)
+                                                        }
+                                                    },
                                                 };
                                                 dragging.set(Some((idx, DragMode::Resize {
                                                     handle,
@@ -846,7 +1096,13 @@ pub fn SigilEditor() -> Element {
                                                 let (w, h) = match &sigil.read().layers[idx].item {
                                                     Item::Rect(r) => (r.width, r.height),
                                                     Item::Image(i) => (i.width, i.height),
-                                                    _ => (0.0, 0.0),
+                                                    Item::Text(t) => {
+                                                        if let Some(&(tw, th)) = text_dimensions.read().get(&sigil.read().layers[idx].id) {
+                                                            (tw, th)
+                                                        } else {
+                                                            (t.text.len() as f32 * t.font_size * 0.6, t.font_size)
+                                                        }
+                                                    },
                                                 };
                                                 let rot_rad = sigil.read().layers[idx].rotation.to_radians();
 
@@ -875,12 +1131,77 @@ pub fn SigilEditor() -> Element {
                             }
                         })
                     }
+
+                    for guide in guides.read().iter() {
+                        if guide.is_vertical {
+                            div {
+                                class: "smart-guide vertical",
+                                style: "left: {guide.pos}px; top: {guide.start}px; height: {guide.end - guide.start}px;"
+                            }
+                        } else {
+                            div {
+                                class: "smart-guide horizontal",
+                                style: "top: {guide.pos}px; left: {guide.start}px; width: {guide.end - guide.start}px;"
+                            }
+                        }
+                    }
                 }
 
                 div {
                     class: "json-output",
                     pre {
                         "{serde_json::to_string_pretty(&*sigil.read()).unwrap()}"
+                    }
+                }
+            }
+        }
+        
+        if *show_load_modal.read() {
+            div { class: "modal-overlay",
+                onclick: move |_| {
+                    show_load_modal.set(false);
+                },
+                div { class: "modal", onclick: move |evt| evt.stop_propagation(),
+                    h3 { "Load JSON" }
+                    textarea {
+                        value: "{load_json_text.read()}",
+                        placeholder: "Paste Sigil JSON here...",
+                        autofocus: "true",
+                        oninput: move |evt| {
+                            load_json_text.set(evt.value());
+                        }
+                    }
+                    if let Some(err) = &*load_error.read() {
+                        div { class: "error-text", "{err}" }
+                    }
+                    div { class: "modal-actions",
+                        button {
+                            class: "primary-btn",
+                            onclick: move |_| {
+                                match serde_json::from_str::<Sigil>(&load_json_text.read()) {
+                                    Ok(new_sigil) => {
+                                        sigil.set(new_sigil);
+                                        selected_layers.write().clear();
+                                        guides.write().clear();
+                                        text_dimensions.write().clear();
+                                        layer_id_counter.set(sigil.read().layers.len() as i32);
+                                        load_error.set(None);
+                                        show_load_modal.set(false);
+                                    },
+                                    Err(e) => {
+                                        load_error.set(Some(format!("Invalid JSON: {}", e)));
+                                    }
+                                }
+                            },
+                            "Load"
+                        }
+                        button {
+                            onclick: move |_| {
+                                show_load_modal.set(false);
+                                load_error.set(None);
+                            },
+                            "Cancel"
+                        }
                     }
                 }
             }
@@ -893,6 +1214,7 @@ fn RenderLayer(
     layer: Layer, 
     is_selected: bool, 
     is_locked: bool,
+    text_dimensions: Signal<HashMap<String, (f32, f32)>>,
     on_move_start: EventHandler<MouseEvent>,
 ) -> Element {
     let style = format!(
@@ -906,7 +1228,13 @@ fn RenderLayer(
     let (w, h) = match &layer.item {
         Item::Rect(r) => (r.width, r.height),
         Item::Image(i) => (i.width, i.height),
-        Item::Text(_) => (0.0, 0.0),
+        Item::Text(t) => {
+            if let Some(&(tw, th)) = text_dimensions.read().get(&layer.id) {
+                (tw, th)
+            } else {
+                (t.text.len() as f32 * t.font_size * 0.6, t.font_size)
+            }
+        },
     };
     
     let (w_css, h_css) = match &layer.item {
@@ -916,8 +1244,65 @@ fn RenderLayer(
     
     let transform_origin = if let Item::Text(_) = &layer.item { "0 0" } else { "50% 50%" };
 
+    let layer_id = layer.id.clone();
+    let item_clone = layer.item.clone();
+    
+    use_effect(use_reactive(&item_clone, move |item| {
+        to_owned![text_dimensions, layer_id];
+        spawn(async move {
+            if let Item::Text(_) = item {
+                let js = format!(
+                    "(() => {{
+                        const canvas = document.__sigilMeasureCanvas || (document.__sigilMeasureCanvas = document.createElement('canvas'));
+                        const ctx = canvas.getContext('2d');
+                        ctx.font = '{}px ' + {};
+                        
+                        const lines = {}.split('\\n');
+                        let maxW = 0;
+                        let lineH = {};
+                        
+                        for (const line of lines) {{
+                            const m = ctx.measureText(line);
+                            maxW = Math.max(maxW, m.width);
+                            const h = (m.actualBoundingBoxAscent || 0) + (m.actualBoundingBoxDescent || 0);
+                            if (h > lineH) lineH = h;
+                        }}
+                        
+                        const totalH = lineH * Math.max(lines.length, 1);
+                        return [maxW, totalH];
+                    }})()",
+                    match &item {
+                        Item::Text(t) => t.font_size,
+                        _ => 0.0
+                    },
+                    match &item {
+                        Item::Text(t) => serde_json::to_string(&t.font_family).unwrap_or("\"Sans Serif\"".to_string()),
+                        _ => "\"\"".to_string()
+                    },
+                    match &item {
+                        Item::Text(t) => serde_json::to_string(&t.text).unwrap_or("\"\"".to_string()),
+                        _ => "\"\"".to_string()
+                    },
+                    match &item {
+                        Item::Text(t) => t.font_size,
+                        _ => 0.0
+                    }
+                );
+                
+                if let Ok(val) = document::eval(&js).recv().await {
+                    if let Ok(dims) = serde_json::from_value::<Vec<f64>>(val) {
+                        if dims.len() == 2 {
+                            text_dimensions.write().insert(layer_id, (dims[0] as f32, dims[1] as f32));
+                        }
+                    }
+                }
+            }
+        });
+    }));
+
     rsx! {
         div {
+            id: "layer-{layer.id}",
             class: "{final_class}",
             style: "{style} width: {w_css}; height: {h_css}; transform-origin: {transform_origin};",
             onmousedown: move |evt| {
@@ -963,6 +1348,7 @@ fn RenderLayer(
 #[component]
 fn SelectionOverlay(
     layer: Layer,
+    text_dimensions: Signal<HashMap<String, (f32, f32)>>,
     on_resize_start: EventHandler<(HandleType, MouseEvent)>,
     on_rotate_start: EventHandler<MouseEvent>,
 ) -> Element {
@@ -974,7 +1360,13 @@ fn SelectionOverlay(
     let (w, h) = match &layer.item {
         Item::Rect(r) => (r.width, r.height),
         Item::Image(i) => (i.width, i.height),
-        Item::Text(_) => (0.0, 0.0),
+        Item::Text(t) => {
+            if let Some(&(tw, th)) = text_dimensions.read().get(&layer.id) {
+                (tw, th)
+            } else {
+                (t.text.len() as f32 * t.font_size * 0.6, t.font_size)
+            }
+        },
     };
 
     let (w_css, h_css) = match &layer.item {

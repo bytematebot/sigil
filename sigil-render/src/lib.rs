@@ -1,3 +1,14 @@
+/*
+    Sigil - dynamic image synthesis engine
+    Copyright (C) 2025 meetzli
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Affero General Public License as published
+    by the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+*/
+
+
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache};
 use sigil_core::{Item, Sigil};
 use thiserror::Error;

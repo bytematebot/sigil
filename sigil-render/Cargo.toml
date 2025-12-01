@@ -1,0 +1,12 @@
+[package]
+name = "sigil-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sigil-core.workspace = true
+tiny-skia.workspace = true
+cosmic-text.workspace = true
+thiserror.workspace = true
+image = "0.24.9"

@@ -1,0 +1,12 @@
+[package]
+name = "sigil-editor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sigil-core.workspace = true
+dioxus.workspace = true
+wasm-bindgen.workspace = true
+serde.workspace = true
+serde_json.workspace = true

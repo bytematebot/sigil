@@ -54,16 +54,16 @@ pub enum DragMode {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct Guide {
-    is_vertical: bool,
-    pos: f32,
-    start: f32,
-    end: f32,
+pub struct Guide {
+    pub is_vertical: bool,
+    pub pos: f32,
+    pub start: f32,
+    pub end: f32,
 }
 
-const GRID_SIZE: f32 = 20.0;
+pub const GRID_SIZE: f32 = 20.0;
 
-fn snap_to_grid(val: f32) -> f32 {
+pub fn snap_to_grid(val: f32) -> f32 {
     (val / GRID_SIZE).round() * GRID_SIZE
 }
 
@@ -244,6 +244,7 @@ pub fn SigilEditor() -> Element {
                                                 (t.text.len() as f32 * t.font_size * 0.6, t.font_size)
                                             }
                                         },
+                                        Item::Slider(s) => (s.width, s.height),
                                     };
 
                                     let mut proposed_x = *orig_x + delta_x as f32;
@@ -299,6 +300,7 @@ pub fn SigilEditor() -> Element {
                                                         (t.text.len() as f32 * t.font_size * 0.6, t.font_size)
                                                     }
                                                 },
+                                                Item::Slider(s) => (s.width, s.height),
                                             };
                                             
                                             other_v_targets.push((l.x, l.y, l.y + lh)); 
@@ -440,6 +442,7 @@ pub fn SigilEditor() -> Element {
                                     match &mut layer.item {
                                         Item::Rect(r) => { r.width = new_w; r.height = new_h; },
                                         Item::Image(i) => { i.width = new_w; i.height = new_h; },
+                                        Item::Slider(s) => { s.width = new_w; s.height = new_h; },
                                         _ => {}
                                     }
                                 }
@@ -650,6 +653,79 @@ pub fn SigilEditor() -> Element {
                                                             if let Ok(val) = evt.value().parse::<f32>() {
                                                                 if let Item::Image(ref mut img) = sigil.write().layers[idx].item {
                                                                     img.border_radius = val;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            Item::Slider(s) => rsx! {
+                                                div {
+                                                    class: "control-group",
+                                                    label { "Width: " }
+                                                    input {
+                                                        r#type: "number",
+                                                        value: "{s.width}",
+                                                        oninput: move |evt| {
+                                                            if let Ok(val) = evt.value().parse::<f32>() {
+                                                                if let Item::Slider(ref mut slider) = sigil.write().layers[idx].item {
+                                                                    slider.width = val;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                div {
+                                                    class: "control-group",
+                                                    label { "Height: " }
+                                                    input {
+                                                        r#type: "number",
+                                                        value: "{s.height}",
+                                                        oninput: move |evt| {
+                                                            if let Ok(val) = evt.value().parse::<f32>() {
+                                                                if let Item::Slider(ref mut slider) = sigil.write().layers[idx].item {
+                                                                    slider.height = val;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                div {
+                                                    class: "control-group",
+                                                    label { "Background Color: " }
+                                                    input {
+                                                        r#type: "color",
+                                                        value: "{s.background_color}",
+                                                        oninput: move |evt| {
+                                                            if let Item::Slider(ref mut slider) = sigil.write().layers[idx].item {
+                                                                slider.background_color = evt.value();
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                div {
+                                                    class: "control-group",
+                                                    label { "Fill Color: " }
+                                                    input {
+                                                        r#type: "color",
+                                                        value: "{s.fill_color}",
+                                                        oninput: move |evt| {
+                                                            if let Item::Slider(ref mut slider) = sigil.write().layers[idx].item {
+                                                                slider.fill_color = evt.value();
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                div {
+                                                    class: "control-group",
+                                                    label { "Radius: " }
+                                                    input {
+                                                        r#type: "number",
+                                                        value: "{s.border_radius}",
+                                                        oninput: move |evt| {
+                                                            if let Ok(val) = evt.value().parse::<f32>() {
+                                                                if let Item::Slider(ref mut slider) = sigil.write().layers[idx].item {
+                                                                    slider.border_radius = val;
                                                                 }
                                                             }
                                                         }
@@ -1077,6 +1153,7 @@ pub fn SigilEditor() -> Element {
                                                             (t.text.len() as f32 * t.font_size * 0.6, t.font_size)
                                                         }
                                                     },
+                                                    Item::Slider(s) => (s.width, s.height),
                                                 };
                                                 dragging.set(Some((idx, DragMode::Resize {
                                                     handle,
@@ -1103,6 +1180,7 @@ pub fn SigilEditor() -> Element {
                                                             (t.text.len() as f32 * t.font_size * 0.6, t.font_size)
                                                         }
                                                     },
+                                                    Item::Slider(s) => (s.width, s.height),
                                                 };
                                                 let rot_rad = sigil.read().layers[idx].rotation.to_radians();
 
@@ -1210,135 +1288,73 @@ pub fn SigilEditor() -> Element {
 }
 
 #[component]
-fn RenderLayer(
+pub fn RenderLayer(
     layer: Layer, 
     is_selected: bool, 
     is_locked: bool,
     text_dimensions: Signal<HashMap<String, (f32, f32)>>,
     on_move_start: EventHandler<MouseEvent>,
 ) -> Element {
-    let style = format!(
-        "left: {}px; top: {}px; transform: rotate({}deg);",
-        layer.x, layer.y, layer.rotation
-    );
-    let class_name = if is_selected { "layer-render selected" } else { "layer-render" };
-    let locked_class = if is_locked { " locked" } else { "" };
-    let final_class = format!("{}{}", class_name, locked_class);
-
-    let (w, h) = match &layer.item {
-        Item::Rect(r) => (r.width, r.height),
-        Item::Image(i) => (i.width, i.height),
-        Item::Text(t) => {
-            if let Some(&(tw, th)) = text_dimensions.read().get(&layer.id) {
-                (tw, th)
-            } else {
-                (t.text.len() as f32 * t.font_size * 0.6, t.font_size)
-            }
-        },
-    };
+    let mut text_dims_write = text_dimensions;
     
-    let (w_css, h_css) = match &layer.item {
-        Item::Text(_) => ("max-content".to_string(), "max-content".to_string()),
-        _ => (format!("{}px", w), format!("{}px", h)),
-    };
+    let border_style = if is_selected { "2px solid #0055ff" } else { "none" };
     
-    let transform_origin = if let Item::Text(_) = &layer.item { "0 0" } else { "50% 50%" };
-
-    let layer_id = layer.id.clone();
-    let item_clone = layer.item.clone();
-    
-    use_effect(use_reactive(&item_clone, move |item| {
-        to_owned![text_dimensions, layer_id];
-        spawn(async move {
-            if let Item::Text(_) = item {
-                let js = format!(
-                    "(() => {{
-                        const canvas = document.__sigilMeasureCanvas || (document.__sigilMeasureCanvas = document.createElement('canvas'));
-                        const ctx = canvas.getContext('2d');
-                        ctx.font = '{}px ' + {};
-                        
-                        const lines = {}.split('\\n');
-                        let maxW = 0;
-                        let lineH = {};
-                        
-                        for (const line of lines) {{
-                            const m = ctx.measureText(line);
-                            maxW = Math.max(maxW, m.width);
-                            const h = (m.actualBoundingBoxAscent || 0) + (m.actualBoundingBoxDescent || 0);
-                            if (h > lineH) lineH = h;
-                        }}
-                        
-                        const totalH = lineH * Math.max(lines.length, 1);
-                        return [maxW, totalH];
-                    }})()",
-                    match &item {
-                        Item::Text(t) => t.font_size,
-                        _ => 0.0
-                    },
-                    match &item {
-                        Item::Text(t) => serde_json::to_string(&t.font_family).unwrap_or("\"Sans Serif\"".to_string()),
-                        _ => "\"\"".to_string()
-                    },
-                    match &item {
-                        Item::Text(t) => serde_json::to_string(&t.text).unwrap_or("\"\"".to_string()),
-                        _ => "\"\"".to_string()
-                    },
-                    match &item {
-                        Item::Text(t) => t.font_size,
-                        _ => 0.0
-                    }
-                );
-                
-                if let Ok(val) = document::eval(&js).recv().await {
-                    if let Ok(dims) = serde_json::from_value::<Vec<f64>>(val) {
-                        if dims.len() == 2 {
-                            text_dimensions.write().insert(layer_id, (dims[0] as f32, dims[1] as f32));
-                        }
-                    }
+    match &layer.item {
+        Item::Slider(s) => {
+             rsx! {
+                div {
+                    key: "{layer.id}",
+                    style: "position: absolute; left: {layer.x}px; top: {layer.y}px; width: {s.width}px; height: {s.height}px; background-color: {s.background_color}; border-radius: {s.border_radius}px; transform: rotate({layer.rotation}deg); cursor: move; outline: {border_style};",
+                    onmousedown: move |evt| on_move_start.call(evt),
                 }
             }
-        });
-    }));
-
-    rsx! {
-        div {
-            id: "layer-{layer.id}",
-            class: "{final_class}",
-            style: "{style} width: {w_css}; height: {h_css}; transform-origin: {transform_origin};",
-            onmousedown: move |evt| {
-                evt.prevent_default();
-                on_move_start.call(evt);
-            },
-            ondragstart: move |evt| evt.prevent_default(),
-            onclick: move |evt| evt.stop_propagation(),
+        },
+        Item::Rect(r) => {
+             rsx! {
+                div {
+                    key: "{layer.id}",
+                    style: "position: absolute; left: {layer.x}px; top: {layer.y}px; width: {r.width}px; height: {r.height}px; background-color: {r.color}; border-radius: {r.border_radius}px; transform: rotate({layer.rotation}deg); cursor: move; outline: {border_style};",
+                    onmousedown: move |evt| on_move_start.call(evt),
+                }
+            }
+        },
+        Item::Image(i) => {
+            rsx! {
+                img {
+                    key: "{layer.id}",
+                    src: "{i.source}",
+                    style: "position: absolute; left: {layer.x}px; top: {layer.y}px; width: {i.width}px; height: {i.height}px; border-radius: {i.border_radius}px; transform: rotate({layer.rotation}deg); cursor: move; outline: {border_style}; user-select: none;",
+                    draggable: "false",
+                    onmousedown: move |evt| on_move_start.call(evt),
+                }
+            }
+        },
+        Item::Text(t) => {
+            let font_family = match t.font_family.as_str() {
+                "Sans Serif" => "sans-serif",
+                "Serif" => "serif",
+                "Monospace" => "monospace",
+                "Cursive" => "cursive",
+                "Fantasy" => "fantasy",
+                _ => "sans-serif",
+            };
             
-            match &layer.item {
-                Item::Rect(rect) => rsx! {
-                    div {
-                        style: "width: 100%; height: 100%; background-color: {rect.color}; border-radius: {rect.border_radius}px;",
-                    }
-                },
-                Item::Text(text) => rsx! {
-                    div {
-                        style: "font-size: {text.font_size}px; color: {text.color}; font-family: {text.font_family}; white-space: pre; user-select: none;",
-                        "{text.text}"
-                    }
-                },
-                Item::Image(img) => rsx! {
-                    if img.source.is_empty() {
-                        div {
-                            class: "image-placeholder",
-                            style: "width: 100%; height: 100%; border-radius: {img.border_radius}px;",
-                            "No Image Source"
+            rsx! {
+                div {
+                    key: "{layer.id}",
+                    style: "position: absolute; left: {layer.x}px; top: {layer.y}px; font-size: {t.font_size}px; color: {t.color}; font-family: {font_family}; transform: rotate({layer.rotation}deg); cursor: move; white-space: nowrap; outline: {border_style}; user-select: none;",
+                    onmousedown: move |evt| on_move_start.call(evt),
+                    onmounted: move |evt| {
+                        let layer_id = layer.id.clone();
+                        async move {
+                            if let Ok(rect) = evt.get_client_rect().await {
+                                let w = rect.width() as f32;
+                                let h = rect.height() as f32;
+                                text_dims_write.write().insert(layer_id, (w, h));
+                            }
                         }
-                    } else {
-                        img {
-                            style: "width: 100%; height: 100%; border-radius: {img.border_radius}px; object-fit: cover;",
-                            src: "{img.source}", 
-                            alt: "img",
-                            draggable: "false",
-                        }
-                    }
+                    },
+                    "{t.text}"
                 }
             }
         }
@@ -1346,17 +1362,12 @@ fn RenderLayer(
 }
 
 #[component]
-fn SelectionOverlay(
+pub fn SelectionOverlay(
     layer: Layer,
     text_dimensions: Signal<HashMap<String, (f32, f32)>>,
     on_resize_start: EventHandler<(HandleType, MouseEvent)>,
     on_rotate_start: EventHandler<MouseEvent>,
 ) -> Element {
-    let style = format!(
-        "left: {}px; top: {}px; transform: rotate({}deg);",
-        layer.x, layer.y, layer.rotation
-    );
-    
     let (w, h) = match &layer.item {
         Item::Rect(r) => (r.width, r.height),
         Item::Image(i) => (i.width, i.height),
@@ -1367,42 +1378,37 @@ fn SelectionOverlay(
                 (t.text.len() as f32 * t.font_size * 0.6, t.font_size)
             }
         },
+        Item::Slider(s) => (s.width, s.height),
     };
 
-    let (w_css, h_css) = match &layer.item {
-        Item::Text(_) => ("max-content".to_string(), "max-content".to_string()),
-        _ => (format!("{}px", w), format!("{}px", h)),
-    };
-    
-    let transform_origin = if let Item::Text(_) = &layer.item { "0 0" } else { "50% 50%" };
-    
-    let show_handles = w > 0.0;
+    let handle_size = 8.0;
+    let offset = -handle_size / 2.0;
 
     rsx! {
         div {
-            class: "selection-overlay",
-            style: "{style} width: {w_css}; height: {h_css}; transform-origin: {transform_origin};",
+            style: "position: absolute; left: {layer.x}px; top: {layer.y}px; width: {w}px; height: {h}px; pointer-events: none; transform: rotate({layer.rotation}deg);",
 
-            if let Item::Text(text) = &layer.item {
+            if matches!(layer.item, Item::Rect(_) | Item::Image(_) | Item::Slider(_)) {
                 div {
-                    style: "font-size: {text.font_size}px; font-family: {text.font_family}; white-space: pre; opacity: 0;",
-                    "{text.text}"
+                    style: "position: absolute; left: {offset}px; top: {offset}px; width: {handle_size}px; height: {handle_size}px; background: white; border: 1px solid #0055ff; pointer-events: auto; cursor: nw-resize;",
+                    onmousedown: move |evt| on_resize_start.call((HandleType::TopLeft, evt)),
+                }
+                div {
+                    style: "position: absolute; right: {offset}px; top: {offset}px; width: {handle_size}px; height: {handle_size}px; background: white; border: 1px solid #0055ff; pointer-events: auto; cursor: ne-resize;",
+                    onmousedown: move |evt| on_resize_start.call((HandleType::TopRight, evt)),
+                }
+                div {
+                    style: "position: absolute; left: {offset}px; bottom: {offset}px; width: {handle_size}px; height: {handle_size}px; background: white; border: 1px solid #0055ff; pointer-events: auto; cursor: sw-resize;",
+                    onmousedown: move |evt| on_resize_start.call((HandleType::BottomLeft, evt)),
+                }
+                div {
+                    style: "position: absolute; right: {offset}px; bottom: {offset}px; width: {handle_size}px; height: {handle_size}px; background: white; border: 1px solid #0055ff; pointer-events: auto; cursor: se-resize;",
+                    onmousedown: move |evt| on_resize_start.call((HandleType::BottomRight, evt)),
                 }
             }
 
-            if show_handles {
-                div { class: "resize-handle tl", onmousedown: move |evt| on_resize_start.call((HandleType::TopLeft, evt)), onclick: move |evt| evt.stop_propagation() }
-                div { class: "resize-handle tr", onmousedown: move |evt| on_resize_start.call((HandleType::TopRight, evt)), onclick: move |evt| evt.stop_propagation() }
-                div { class: "resize-handle bl", onmousedown: move |evt| on_resize_start.call((HandleType::BottomLeft, evt)), onclick: move |evt| evt.stop_propagation() }
-                div { class: "resize-handle br", onmousedown: move |evt| on_resize_start.call((HandleType::BottomRight, evt)), onclick: move |evt| evt.stop_propagation() }
-                div { class: "resize-handle t", onmousedown: move |evt| on_resize_start.call((HandleType::Top, evt)), onclick: move |evt| evt.stop_propagation() }
-                div { class: "resize-handle b", onmousedown: move |evt| on_resize_start.call((HandleType::Bottom, evt)), onclick: move |evt| evt.stop_propagation() }
-                div { class: "resize-handle l", onmousedown: move |evt| on_resize_start.call((HandleType::Left, evt)), onclick: move |evt| evt.stop_propagation() }
-                div { class: "resize-handle r", onmousedown: move |evt| on_resize_start.call((HandleType::Right, evt)), onclick: move |evt| evt.stop_propagation() }
-            }
-
-            div { 
-                class: "rotate-handle",
+            div {
+                style: "position: absolute; left: 50%; top: -25px; width: 10px; height: 10px; border-radius: 50%; background: white; border: 1px solid #0055ff; transform: translate(-50%, 0); pointer-events: auto; cursor: grab;",
                 onmousedown: move |evt| on_rotate_start.call(evt),
                 onclick: move |evt| evt.stop_propagation(),
             }
@@ -1416,5 +1422,6 @@ fn item_type_name(item: &Item) -> &'static str {
         Item::Rect(_) => "Rectangle",
         Item::Text(_) => "Text",
         Item::Image(_) => "Image",
+        Item::Slider(_) => "Slider",
     }
 }

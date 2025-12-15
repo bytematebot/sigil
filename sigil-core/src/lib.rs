@@ -12,6 +12,8 @@
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
+pub mod html_renderer;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Sigil {
     pub width: u32,
@@ -42,6 +44,7 @@ pub enum Item {
     Text(TextItem),
     Image(ImageItem),
     Rect(RectItem),
+    Slider(SliderItem),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -68,6 +71,17 @@ pub struct RectItem {
     pub border_radius: f32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SliderItem {
+    pub width: f32,
+    pub height: f32,
+    pub value: f32,
+    pub max_value: f32,
+    pub background_color: String,
+    pub fill_color: String,
+    pub border_radius: f32,
+}
+
 
 impl Sigil {
     pub fn resolve(&self, variables: &HashMap<String, String>) -> Self {
@@ -86,6 +100,10 @@ impl Sigil {
                 },
                 Item::Rect(rect) => {
                     rect.color = replace_vars(&rect.color, variables);
+                },
+                Item::Slider(slider) => {
+                    slider.background_color = replace_vars(&slider.background_color, variables);
+                    slider.fill_color = replace_vars(&slider.fill_color, variables);
                 }
             }
         }

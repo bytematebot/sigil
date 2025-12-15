@@ -68,16 +68,56 @@ impl Renderer {
         let pixmap = self.pixmap_buffer.as_mut()
             .ok_or_else(|| RenderError::PixmapCreationError("Invalid canvas dimensions".into()))?;
 
-        let bg_color = parse_color(&sigil.background)
-            .ok_or_else(|| RenderError::InvalidColorFormat(sigil.background.clone()))?;
+        if let Some(color) = parse_color(&sigil.background) {
+            pixmap.fill(color);
+        } else if let Some(image_bytes) = resources.get(&sigil.background) {
+            if let Ok(dynamic_image) = image::load_from_memory(image_bytes) {
+                let target_width = sigil.width;
+                let target_height = sigil.height;
+                
+                let resized = dynamic_image.resize_to_fill(
+                    target_width,
+                    target_height,
+                    image::imageops::FilterType::Lanczos3
+                );
+                
+                let rgba_image = resized.to_rgba8();
+                let mut pixels = Vec::with_capacity((target_width * target_height * 4) as usize);
 
-        pixmap.fill(bg_color);
+                for pixel in rgba_image.pixels() {
+                    let r = pixel[0];
+                    let g = pixel[1];
+                    let b = pixel[2];
+                    let a = pixel[3];
+
+                    let a_f = a as f32 / 255.0;
+                    pixels.push((r as f32 * a_f) as u8);
+                    pixels.push((g as f32 * a_f) as u8);
+                    pixels.push((b as f32 * a_f) as u8);
+                    pixels.push(a);
+                }
+                
+                if let Some(bg_pixmap) = Pixmap::from_vec(pixels, IntSize::from_wh(target_width, target_height).unwrap()) {
+                    pixmap.draw_pixmap(
+                        0, 0,
+                        bg_pixmap.as_ref(),
+                        &PixmapPaint::default(),
+                        Transform::identity(),
+                        None,
+                    );
+                }
+            }
+        } else {
+            // Fallback to black if neither color nor resource found
+             pixmap.fill(Color::BLACK);
+        }
 
         for layer in &sigil.layers {
             let (w, h) = match &layer.item {
                 Item::Rect(r) => (r.width, r.height),
                 Item::Image(i) => (i.width, i.height),
                 Item::Text(_) => (0.0, 0.0),
+                Item::Slider(s) => (s.width, s.height),
             };
 
             let cx = w / 2.0;
@@ -300,6 +340,47 @@ impl Renderer {
 
                     } else {
                         println!("Warning: Resource '{}' not found", img.source);
+                    }
+                }
+                Item::Slider(slider) => {
+                    let bg_color = parse_color(&slider.background_color)
+                        .ok_or_else(|| RenderError::InvalidColorFormat(slider.background_color.clone()))?;
+                    let fill_color = parse_color(&slider.fill_color)
+                        .ok_or_else(|| RenderError::InvalidColorFormat(slider.fill_color.clone()))?;
+
+                    let mut bg_paint = Paint::default();
+                    bg_paint.set_color(bg_color);
+                    bg_paint.anti_alias = true;
+
+                    let bg_rect = Rect::from_xywh(0.0, 0.0, slider.width, slider.height)
+                        .ok_or_else(|| RenderError::InvalidDimensions("Slider width/height must be > 0".into()))?;
+
+                    if slider.border_radius > 0.0 {
+                        let path = create_rounded_rect_path(bg_rect, slider.border_radius);
+                        if let Some(p) = path {
+                            pixmap.fill_path(&p, &bg_paint, FillRule::Winding, layer_transform, None);
+                        }
+                    } else {
+                        pixmap.fill_rect(bg_rect, &bg_paint, layer_transform, None);
+                    }
+
+                    let fill_width = (slider.value / slider.max_value.max(1.0)) * slider.width;
+                    if fill_width > 0.0 {
+                        let mut fill_paint = Paint::default();
+                        fill_paint.set_color(fill_color);
+                        fill_paint.anti_alias = true;
+
+                        let fill_rect = Rect::from_xywh(0.0, 0.0, fill_width, slider.height)
+                            .ok_or_else(|| RenderError::InvalidDimensions("Fill width/height must be > 0".into()))?;
+
+                        if slider.border_radius > 0.0 {
+                            let path = create_rounded_rect_path(fill_rect, slider.border_radius);
+                            if let Some(p) = path {
+                                pixmap.fill_path(&p, &fill_paint, FillRule::Winding, layer_transform, None);
+                            }
+                        } else {
+                            pixmap.fill_rect(fill_rect, &fill_paint, layer_transform, None);
+                        }
                     }
                 }
             }

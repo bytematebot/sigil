@@ -66,10 +66,32 @@ impl Renderer {
     /// This method reuses the internal buffer to avoid allocation overhead.
     pub fn render_raw(&mut self, sigil: &Sigil, resources: &HashMap<String, Vec<u8>>) -> Result<&[u8], RenderError> {
         // Load fonts from resources
+        let mut new_fonts = false;
         for (name, data) in resources {
             if (name.ends_with(".ttf") || name.ends_with(".otf") || name.ends_with(".woff2")) && !self.loaded_fonts.contains(name) {
                 self.font_system.db_mut().load_font_data(data.clone());
                 self.loaded_fonts.insert(name.clone());
+                new_fonts = true;
+            }
+        }
+        
+        if new_fonts {
+            let mut first_family = None;
+            self.font_system.db().faces().for_each(|face| {
+                if first_family.is_none() {
+                    if let Some((name, _)) = face.families.first() {
+                        first_family = Some(name.clone());
+                    }
+                }
+            });
+
+            if let Some(family) = first_family {
+                let db = self.font_system.db_mut();
+                if db.sans_serif_family().is_empty() { db.set_sans_serif_family(&family); }
+                if db.serif_family().is_empty() { db.set_serif_family(&family); }
+                if db.monospace_family().is_empty() { db.set_monospace_family(&family); }
+                if db.cursive_family().is_empty() { db.set_cursive_family(&family); }
+                if db.fantasy_family().is_empty() { db.set_fantasy_family(&family); }
             }
         }
 

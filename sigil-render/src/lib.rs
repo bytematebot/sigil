@@ -41,6 +41,7 @@ pub struct Renderer {
     font_system: FontSystem,
     swash_cache: SwashCache,
     pixmap_buffer: Option<Pixmap>,
+    image_cache: HashMap<String, Pixmap>,
 }
 
 impl Default for Renderer {
@@ -55,6 +56,7 @@ impl Renderer {
             font_system: FontSystem::new(),
             swash_cache: SwashCache::new(),
             pixmap_buffer: None,
+            image_cache: HashMap::new(),
         }
     }
 
@@ -70,46 +72,62 @@ impl Renderer {
 
         if let Some(color) = parse_color(&sigil.background) {
             pixmap.fill(color);
-        } else if let Some(image_bytes) = resources.get(&sigil.background) {
-            if let Ok(dynamic_image) = image::load_from_memory(image_bytes) {
-                let target_width = sigil.width;
-                let target_height = sigil.height;
-                
-                let resized = dynamic_image.resize_to_fill(
-                    target_width,
-                    target_height,
-                    image::imageops::FilterType::Lanczos3
-                );
-                
-                let rgba_image = resized.to_rgba8();
-                let mut pixels = Vec::with_capacity((target_width * target_height * 4) as usize);
-
-                for pixel in rgba_image.pixels() {
-                    let r = pixel[0];
-                    let g = pixel[1];
-                    let b = pixel[2];
-                    let a = pixel[3];
-
-                    let a_f = a as f32 / 255.0;
-                    pixels.push((r as f32 * a_f) as u8);
-                    pixels.push((g as f32 * a_f) as u8);
-                    pixels.push((b as f32 * a_f) as u8);
-                    pixels.push(a);
-                }
-                
-                if let Some(bg_pixmap) = Pixmap::from_vec(pixels, IntSize::from_wh(target_width, target_height).unwrap()) {
-                    pixmap.draw_pixmap(
-                        0, 0,
-                        bg_pixmap.as_ref(),
-                        &PixmapPaint::default(),
-                        Transform::identity(),
-                        None,
-                    );
-                }
-            }
         } else {
-            // Fallback to black if neither color nor resource found
-             pixmap.fill(Color::BLACK);
+            let bg_cache_key = format!("bg_{}_{}_{}", sigil.background, sigil.width, sigil.height);
+            let bg_pixmap = if let Some(cached) = self.image_cache.get(&bg_cache_key) {
+                Some(cached)
+            } else if let Some(image_bytes) = resources.get(&sigil.background) {
+                if let Ok(dynamic_image) = image::load_from_memory(image_bytes) {
+                    let target_width = sigil.width;
+                    let target_height = sigil.height;
+                    
+                    let resized = dynamic_image.resize_to_fill(
+                        target_width,
+                        target_height,
+                        image::imageops::FilterType::Lanczos3
+                    );
+                    
+                    let rgba_image = resized.to_rgba8();
+                    let mut pixels = Vec::with_capacity((target_width * target_height * 4) as usize);
+
+                    for pixel in rgba_image.pixels() {
+                        let r = pixel[0];
+                        let g = pixel[1];
+                        let b = pixel[2];
+                        let a = pixel[3];
+
+                        let a_f = a as f32 / 255.0;
+                        pixels.push((r as f32 * a_f) as u8);
+                        pixels.push((g as f32 * a_f) as u8);
+                        pixels.push((b as f32 * a_f) as u8);
+                        pixels.push(a);
+                    }
+                    
+                    if let Some(pixmap) = Pixmap::from_vec(pixels, IntSize::from_wh(target_width, target_height).unwrap()) {
+                        self.image_cache.insert(bg_cache_key.clone(), pixmap);
+                        self.image_cache.get(&bg_cache_key)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if let Some(bg_pixmap) = bg_pixmap {
+                pixmap.draw_pixmap(
+                    0, 0,
+                    bg_pixmap.as_ref(),
+                    &PixmapPaint::default(),
+                    Transform::identity(),
+                    None,
+                );
+            } else {
+                // Fallback to black if neither color nor resource found
+                pixmap.fill(Color::BLACK);
+            }
         }
 
         for layer in &sigil.layers {
@@ -264,7 +282,11 @@ impl Renderer {
 
 
                 Item::Image(img) => {
-                    if let Some(image_bytes) = resources.get(&img.source) {
+                    let cache_key = format!("{}_{}_{}", img.source, img.width, img.height);
+                    
+                    let image_pixmap = if let Some(cached) = self.image_cache.get(&cache_key) {
+                        Some(cached)
+                    } else if let Some(image_bytes) = resources.get(&img.source) {
                         let dynamic_image = match image::load_from_memory(image_bytes) {
                             Ok(img) => img,
                             Err(e) => {
@@ -303,15 +325,25 @@ impl Renderer {
                             pixels.push(a);
                         }
 
-                        if let Some(image_pixmap) = Pixmap::from_vec(pixels, IntSize::from_wh(target_width, target_height).unwrap()) {
+                        if let Some(pixmap) = Pixmap::from_vec(pixels, IntSize::from_wh(target_width, target_height).unwrap()) {
+                            self.image_cache.insert(cache_key.clone(), pixmap);
+                            self.image_cache.get(&cache_key)
+                        } else {
+                            None
+                        }
+                    } else {
+                        println!("Warning: Resource '{}' not found", img.source);
+                        None
+                    };
 
-                            let pattern = Pattern::new(
-                                image_pixmap.as_ref(),
-                                SpreadMode::Pad,
-                                FilterQuality::Bilinear,
-                                1.0,
-                                Transform::identity(),
-                            );
+                    if let Some(image_pixmap) = image_pixmap {
+                        let pattern = Pattern::new(
+                            image_pixmap.as_ref(),
+                            SpreadMode::Pad,
+                            FilterQuality::Bilinear,
+                            1.0,
+                            Transform::identity(),
+                        );
 
                             let mut paint = Paint::default();
                             paint.shader = pattern;
@@ -337,10 +369,6 @@ impl Renderer {
                                 );
                             }
                         }
-
-                    } else {
-                        println!("Warning: Resource '{}' not found", img.source);
-                    }
                 }
                 Item::Slider(slider) => {
                     let bg_color = parse_color(&slider.background_color)

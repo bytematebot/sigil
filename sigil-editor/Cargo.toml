@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-sigil-core.workspace = true
+sigil-core = { workspace = true, features = ["rsx"] }
 dioxus.workspace = true
 wasm-bindgen.workspace = true
 serde.workspace = true

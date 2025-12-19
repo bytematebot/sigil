@@ -42,6 +42,7 @@ pub struct Renderer {
     swash_cache: SwashCache,
     pixmap_buffer: Option<Pixmap>,
     image_cache: HashMap<String, Pixmap>,
+    loaded_fonts: std::collections::HashSet<String>,
 }
 
 impl Default for Renderer {
@@ -57,12 +58,21 @@ impl Renderer {
             swash_cache: SwashCache::new(),
             pixmap_buffer: None,
             image_cache: HashMap::new(),
+            loaded_fonts: std::collections::HashSet::new(),
         }
     }
 
     /// Renders the Sigil to the internal buffer and returns the raw pixel data (Premultiplied RGBA8).
     /// This method reuses the internal buffer to avoid allocation overhead.
     pub fn render_raw(&mut self, sigil: &Sigil, resources: &HashMap<String, Vec<u8>>) -> Result<&[u8], RenderError> {
+        // Load fonts from resources
+        for (name, data) in resources {
+            if (name.ends_with(".ttf") || name.ends_with(".otf") || name.ends_with(".woff2")) && !self.loaded_fonts.contains(name) {
+                self.font_system.db_mut().load_font_data(data.clone());
+                self.loaded_fonts.insert(name.clone());
+            }
+        }
+
         if self.pixmap_buffer.as_ref().map_or(true, |p| p.width() != sigil.width || p.height() != sigil.height) {
             self.pixmap_buffer = Pixmap::new(sigil.width, sigil.height);
         }
@@ -185,12 +195,41 @@ impl Renderer {
 
                     let mut attrs = Attrs::new();
 
-                    let family = match text_item.font_family.to_lowercase().as_str() {
-                        "arial" | "sans-serif" | "sans serif" => Family::SansSerif,
-                        "serif" => Family::Serif,
-                        "mono" | "monospace" => Family::Monospace,
-                        _ => Family::Name(&text_item.font_family),
-                    };
+                    let family_list: Vec<&str> = text_item.font_family.split(',').map(|s| s.trim()).collect();
+                    let mut family = Family::SansSerif;
+
+                    for f in family_list {
+                        match f.to_lowercase().as_str() {
+                            "arial" | "sans-serif" | "sans serif" | "system-ui" | "-apple-system" => {
+                                family = Family::SansSerif;
+                                break;
+                            }
+                            "serif" => {
+                                family = Family::Serif;
+                                break;
+                            }
+                            "mono" | "monospace" => {
+                                family = Family::Monospace;
+                                break;
+                            }
+                            _ => {
+                                // Check if font exists in system
+                                let mut found = false;
+                                self.font_system.db().faces().for_each(|face| {
+                                    for (name, _) in &face.families {
+                                        if name.to_lowercase() == f.to_lowercase() {
+                                            found = true;
+                                        }
+                                    }
+                                });
+
+                                if found {
+                                    family = Family::Name(f);
+                                    break;
+                                }
+                            }
+                        }
+                    }
 
                     attrs = attrs.family(family);
 

@@ -12,9 +12,6 @@
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "rsx")]
-pub mod html_renderer;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Sigil {
     pub width: u32,

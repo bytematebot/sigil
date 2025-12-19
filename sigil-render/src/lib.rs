@@ -87,11 +87,11 @@ impl Renderer {
 
             if let Some(family) = first_family {
                 let db = self.font_system.db_mut();
-                if db.sans_serif_family().is_empty() { db.set_sans_serif_family(&family); }
-                if db.serif_family().is_empty() { db.set_serif_family(&family); }
-                if db.monospace_family().is_empty() { db.set_monospace_family(&family); }
-                if db.cursive_family().is_empty() { db.set_cursive_family(&family); }
-                if db.fantasy_family().is_empty() { db.set_fantasy_family(&family); }
+                db.set_sans_serif_family(family.clone());
+                db.set_serif_family(family.clone());
+                db.set_monospace_family(family.clone());
+                db.set_cursive_family(family.clone());
+                db.set_fantasy_family(family);
             }
         }
 

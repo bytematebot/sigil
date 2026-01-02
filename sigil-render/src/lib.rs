@@ -76,6 +76,14 @@ impl Renderer {
         }
         
         if new_fonts {
+            // Log all loaded font families for debugging
+            println!("[sigil] Loaded font families:");
+            self.font_system.db().faces().for_each(|face| {
+                for (name, _) in &face.families {
+                    println!("[sigil]   - {}", name);
+                }
+            });
+
             let mut first_family = None;
             self.font_system.db().faces().for_each(|face| {
                 if first_family.is_none() {
@@ -86,6 +94,7 @@ impl Renderer {
             });
 
             if let Some(family) = first_family {
+                println!("[sigil] Setting default family to: {}", family);
                 let db = self.font_system.db_mut();
                 db.set_sans_serif_family(family.clone());
                 db.set_serif_family(family.clone());
@@ -236,21 +245,32 @@ impl Renderer {
                             }
                             _ => {
                                 // Check if font exists in system
-                                let mut found = false;
+                                // Normalize font name by removing spaces for comparison
+                                let normalized_query = f.to_lowercase().replace(' ', "");
+                                let mut found_name: Option<String> = None;
+                                
                                 self.font_system.db().faces().for_each(|face| {
                                     for (name, _) in &face.families {
-                                        if name.to_lowercase() == f.to_lowercase() {
-                                            found = true;
+                                        let normalized_name = name.to_lowercase().replace(' ', "");
+                                        if normalized_name == normalized_query || name.to_lowercase() == f.to_lowercase() {
+                                            found_name = Some(name.clone());
                                         }
                                     }
                                 });
 
-                                if found {
-                                    family = Family::Name(f);
+                                if let Some(ref name) = found_name {
+                                    println!("[sigil] Matched font '{}' -> '{}'", f, name);
+                                    family = Family::Name(Box::leak(name.clone().into_boxed_str()));
                                     break;
                                 }
                             }
                         }
+                    }
+
+                    // Log if we're using fallback
+                    match family {
+                        Family::SansSerif => println!("[sigil] Using SansSerif fallback for font_family: {}", text_item.font_family),
+                        _ => {}
                     }
 
                     attrs = attrs.family(family);
